@@ -15,6 +15,9 @@
  */
 #ifndef MASSTREE_STRUCT_HH
 #define MASSTREE_STRUCT_HH
+
+#include <atomic>
+
 #include "masstree.hh"
 #include "nodeversion.hh"
 #include "stringbag.hh"
@@ -269,6 +272,7 @@ class leaf : public node_base<P> {
     uint8_t modstate_;
     uint8_t keylenx_[width];
     typename permuter_type::storage_type permutation_;
+    uint64_t ts;
     ikey_type ikey0_[width];
     leafvalue_type lv_[width];
     external_ksuf_type* ksuf_;
@@ -323,6 +327,23 @@ class leaf : public node_base<P> {
     }
     phantom_epoch_type phantom_epoch() const {
         return P::need_phantom_epoch ? phantom_epoch_[0] : phantom_epoch_type();
+    }
+
+    uint64_t get_ts() {
+        return __atomic_load_n(&ts, __ATOMIC_RELAXED);
+    }
+
+    void update_ts(uint64_t your_ts) {
+        uint64_t current_ts = __atomic_load_n(&ts, __ATOMIC_ACQUIRE);
+        while (true) {
+            if (current_ts < your_ts) {
+                if (__atomic_compare_exchange_n(&ts, &current_ts, your_ts, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                    return;
+                }
+            } else {
+                return;
+            }
+        }
     }
 
     int size() const {
