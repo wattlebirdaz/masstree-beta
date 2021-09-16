@@ -272,7 +272,7 @@ class leaf : public node_base<P> {
     uint8_t modstate_;
     uint8_t keylenx_[width];
     typename permuter_type::storage_type permutation_;
-    uint64_t ts;
+    uint64_t ts_;
     ikey_type ikey0_[width];
     leafvalue_type lv_[width];
     external_ksuf_type* ksuf_;
@@ -286,7 +286,7 @@ class leaf : public node_base<P> {
     kvtimestamp_t created_at_[P::debug_level > 0];
     internal_ksuf_type iksuf_[0];
 
-    leaf(size_t sz, phantom_epoch_type phantom_epoch)
+    leaf(size_t sz, phantom_epoch_type phantom_epoch, uint64_t ts)
         : node_base<P>(true), modstate_(modstate_insert),
           permutation_(permuter_type::make_empty()),
           ksuf_(), parent_(), iksuf_{} {
@@ -298,12 +298,13 @@ class leaf : public node_base<P> {
         if (P::need_phantom_epoch) {
             phantom_epoch_[0] = phantom_epoch;
         }
+        ts_ = ts;
     }
 
-    static leaf<P>* make(int ksufsize, phantom_epoch_type phantom_epoch, threadinfo& ti) {
+    static leaf<P>* make(uint64_t ts, int ksufsize, phantom_epoch_type phantom_epoch, threadinfo& ti) {
         size_t sz = iceil(sizeof(leaf<P>) + std::min(ksufsize, 128), 64);
         void* ptr = ti.pool_allocate(sz, memtag_masstree_leaf);
-        leaf<P>* n = new(ptr) leaf<P>(sz, phantom_epoch);
+        leaf<P>* n = new(ptr) leaf<P>(sz, phantom_epoch, ts);
         assert(n);
         if (P::debug_level > 0) {
             n->created_at_[0] = ti.operation_timestamp();
@@ -311,7 +312,7 @@ class leaf : public node_base<P> {
         return n;
     }
     static leaf<P>* make_root(int ksufsize, leaf<P>* parent, threadinfo& ti) {
-        leaf<P>* n = make(ksufsize, parent ? parent->phantom_epoch() : phantom_epoch_type(), ti);
+        leaf<P>* n = make(0, ksufsize, parent ? parent->phantom_epoch() : phantom_epoch_type(), ti);
         n->next_.ptr = n->prev_ = 0;
         n->ikey0_[0] = 0; // to avoid undefined behavior
         n->make_layer_root();
@@ -330,14 +331,14 @@ class leaf : public node_base<P> {
     }
 
     uint64_t get_ts() {
-        return __atomic_load_n(&ts, __ATOMIC_RELAXED);
+        return __atomic_load_n(&ts_, __ATOMIC_RELAXED);
     }
 
     void update_ts(uint64_t your_ts) {
-        uint64_t current_ts = __atomic_load_n(&ts, __ATOMIC_ACQUIRE);
+        uint64_t current_ts = __atomic_load_n(&ts_, __ATOMIC_ACQUIRE);
         while (true) {
             if (current_ts < your_ts) {
-                if (__atomic_compare_exchange_n(&ts, &current_ts, your_ts, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                if (__atomic_compare_exchange_n(&ts_, &current_ts, your_ts, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
                     return;
                 }
             } else {
